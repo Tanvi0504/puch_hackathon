@@ -1,5 +1,5 @@
 import asyncio
-from typing import Annotated
+from typing import Annotated, Optional
 import os
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -12,6 +12,10 @@ from pydantic import BaseModel, Field, AnyUrl
 import markdownify
 import httpx
 import readabilipy
+from bs4 import BeautifulSoup
+
+# --- Import your database functions ---
+from whatsappbot.db import init_db, add_task, list_tasks, complete_task, delete_task
 
 # --- Load environment variables ---
 load_dotenv()
@@ -93,7 +97,7 @@ class Fetch:
         return content
 
     @staticmethod
-    async def google_search_links(query: str, num_results: int = 5) -> list[str]:
+    async def Google_Search_links(query: str, num_results: int = 5) -> list[str]:
         """
         Perform a scoped DuckDuckGo search and return a list of job posting URLs.
         (Using DuckDuckGo because Google blocks most programmatic scraping.)
@@ -106,7 +110,6 @@ class Fetch:
             if resp.status_code != 200:
                 return ["<error>Failed to perform search.</error>"]
 
-        from bs4 import BeautifulSoup
         soup = BeautifulSoup(resp.text, "html.parser")
         for a in soup.find_all("a", class_="result__a", href=True):
             href = a["href"]
@@ -128,7 +131,7 @@ mcp = FastMCP(
 async def validate() -> str:
     return MY_NUMBER
 
-# --- Tool: job_finder (now smart!) ---
+# --- Tool: job_finder (from starter code) ---
 JobFinderDescription = RichToolDescription(
     description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
     use_when="Use this to evaluate job descriptions or search for jobs using freeform goals.",
@@ -162,7 +165,7 @@ async def job_finder(
         )
 
     if "look for" in user_goal.lower() or "find" in user_goal.lower():
-        links = await Fetch.google_search_links(user_goal)
+        links = await Fetch.Google_Search_links(user_goal)
         return (
             f"🔍 **Search Results for**: _{user_goal}_\n\n" +
             "\n".join(f"- {link}" for link in links)
@@ -171,41 +174,57 @@ async def job_finder(
     raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, or a search query in user_goal."))
 
 
-# Image inputs and sending images
+# --- Task Management Tools (NEW) ---
 
-MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION = RichToolDescription(
-    description="Convert an image to black and white and save it.",
-    use_when="Use this tool when the user provides an image URL and requests it to be converted to black and white.",
-    side_effects="The image will be processed and saved in a black and white format.",
-)
-
-@mcp.tool(description=MAKE_IMG_BLACK_AND_WHITE_DESCRIPTION.model_dump_json())
-async def make_img_black_and_white(
-    puch_image_data: Annotated[str, Field(description="Base64-encoded image data to convert to black and white")] = None,
-) -> list[TextContent | ImageContent]:
-    import base64
-    import io
-
-    from PIL import Image
-
+@mcp.tool(name="add_task", description="Adds a new task to the user's to-do list with a specified scope.")
+async def add_task_tool(phone: str, scope: str, text: str) -> str:
     try:
-        image_bytes = base64.b64decode(puch_image_data)
-        image = Image.open(io.BytesIO(image_bytes))
-
-        bw_image = image.convert("L")
-
-        buf = io.BytesIO()
-        bw_image.save(buf, format="PNG")
-        bw_bytes = buf.getvalue()
-        bw_base64 = base64.b64encode(bw_bytes).decode("utf-8")
-
-        return [ImageContent(type="image", mimeType="image/png", data=bw_base64)]
+        task_id = add_task(phone, scope, text)
+        return f"✅ Added (#{task_id}) to {scope}: “{text}”"
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=str(e)))
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to add task: {e}"))
+
+@mcp.tool(name="list_tasks", description="Lists all open tasks for a user, optionally filtered by scope.")
+async def list_tasks_tool(phone: str, scope: Optional[str] = None) -> str:
+    try:
+        rows = list_tasks(phone, scope)
+        if not rows:
+            sc = scope or "all"
+            return f"(empty) No open tasks in {sc}."
+        else:
+            lines = [f"• #{r['id']} [{r['scope']}] {r['text']}" for r in rows]
+            return "Your tasks:\n" + "\n".join(lines)
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to list tasks: {e}"))
+
+@mcp.tool(name="complete_task", description="Marks a task as complete using the task ID or text.")
+async def complete_task_tool(phone: str, task_text_or_id: str) -> str:
+    try:
+        count = complete_task(phone, task_text_or_id)
+        if count:
+            return "✅ Marked done."
+        else:
+            return "Couldn’t find that task."
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to complete task: {e}"))
+
+@mcp.tool(name="delete_task", description="Deletes a task from the list using the task ID or text.")
+async def delete_task_tool(phone: str, task_text_or_id: str) -> str:
+    try:
+        count = delete_task(phone, task_text_or_id)
+        if count:
+            return "🗑️ Deleted."
+        else:
+            return "Couldn’t find that task."
+    except Exception as e:
+        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to delete task: {e}"))
+
 
 # --- Run MCP Server ---
 async def main():
     print("🚀 Starting MCP server on http://0.0.0.0:8086")
+    # Initialize the database on server startup
+    init_db()
     await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
 
 if __name__ == "__main__":
