@@ -86,8 +86,9 @@ def delete_task(phone: str, task_text_or_id: str) -> int:
             (phone, int(task_text_or_id)),
         )
     else:
+        # Corrected: Removed "LIMIT 1" from the DELETE query
         cur.execute(
-            "DELETE FROM tasks WHERE phone=? AND text LIKE ? LIMIT 1",
+            "DELETE FROM tasks WHERE phone=? AND text LIKE ?",
             (phone, f"%{task_text_or_id}%"),
         )
     conn.commit()
