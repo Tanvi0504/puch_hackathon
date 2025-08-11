@@ -20,7 +20,6 @@ from whatsappbot.db import init_db, add_task, list_tasks, complete_task, delete_
 # --- Load environment variables ---
 load_dotenv()
 
-
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
 
@@ -132,7 +131,7 @@ mcp = FastMCP(
 async def validate() -> str:
     return MY_NUMBER
 
-# --- Tool: job_finder (from starter code) ---
+# --- Tool: job_finder ---
 JobFinderDescription = RichToolDescription(
     description="Smart job tool: analyze descriptions, fetch URLs, or search jobs based on free text.",
     use_when="Use this to evaluate job descriptions or search for jobs using freeform goals.",
@@ -146,9 +145,6 @@ async def job_finder(
     job_url: Annotated[AnyUrl | None, Field(description="A URL to fetch a job description from.")] = None,
     raw: Annotated[bool, Field(description="Return raw HTML content if True")] = False,
 ) -> str:
-    """
-    Handles multiple job discovery methods: direct description, URL fetch, or freeform search query.
-    """
     if job_description:
         return (
             f"📝 **Job Description Analysis**\n\n"
@@ -174,9 +170,7 @@ async def job_finder(
 
     raise McpError(ErrorData(code=INVALID_PARAMS, message="Please provide either a job description, a job URL, or a search query in user_goal."))
 
-
-# --- Task Management Tools (NEW) ---
-
+# --- Task Management Tools ---
 @mcp.tool(name="add_task", description="Adds a new task to the user's to-do list with a specified scope.")
 async def add_task_tool(phone: str, scope: str, text: str) -> str:
     try:
@@ -220,13 +214,12 @@ async def delete_task_tool(phone: str, task_text_or_id: str) -> str:
     except Exception as e:
         raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to delete task: {e}"))
 
-
 # --- Run MCP Server ---
 async def main():
-    print("🚀 Starting MCP server on http://0.0.0.0:8086")
-    # Initialize the database on server startup
+    port = int(os.environ.get("PORT", 8086))  # Railway sets PORT automatically
+    print(f"🚀 Starting MCP server on http://0.0.0.0:{port}")
     init_db()
-    await mcp.run_async("streamable-http", host="0.0.0.0", port=8086)
+    await mcp.run_async("streamable-http", host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     asyncio.run(main())
