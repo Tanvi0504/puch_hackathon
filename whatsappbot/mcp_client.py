@@ -1,5 +1,3 @@
-# whatsappbot/mcp_client.py
-
 import os
 import httpx
 from typing import Optional

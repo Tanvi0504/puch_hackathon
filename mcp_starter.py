@@ -20,6 +20,7 @@ from whatsappbot.db import init_db, add_task, list_tasks, complete_task, delete_
 # --- Load environment variables ---
 load_dotenv()
 
+
 TOKEN = os.environ.get("AUTH_TOKEN")
 MY_NUMBER = os.environ.get("MY_NUMBER")
 
