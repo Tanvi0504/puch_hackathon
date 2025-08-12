@@ -1,1 +1,1 @@
-web: python3 mcp_starter.py
+web: uvicorn puch-task-manager.whatsappbot.main:app --host 0.0.0.0 --port $PORT
