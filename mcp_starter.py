@@ -3,16 +3,24 @@ from typing import Annotated, Optional
 import os
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.bearer import BearerAuthProvider, RSAKeyPair
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 from mcp import ErrorData, McpError
 from mcp.server.auth.provider import AccessToken
-from mcp.types import TextContent, ImageContent, INVALID_PARAMS, INTERNAL_ERROR
+from mcp.types import INVALID_PARAMS
 from pydantic import BaseModel, Field, AnyUrl
 
 import markdownify
 import httpx
 import readabilipy
 from bs4 import BeautifulSoup
+from jose import jwt, jwk
+
+# Remove this import because it does not exist in python-jose
+# from jose.jwk import generate_key
+
+# Import cryptography for RSA key generation
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 
 # --- Import your database functions ---
 from whatsappbot.db import init_db, add_task, list_tasks, complete_task, delete_task
@@ -27,13 +35,28 @@ assert TOKEN is not None, "Please set AUTH_TOKEN in your .env file"
 assert MY_NUMBER is not None, "Please set MY_NUMBER in your .env file"
 
 # --- Auth Provider ---
-class SimpleBearerAuthProvider(BearerAuthProvider):
+class SimpleJWTVerifier(JWTVerifier):
     def __init__(self, token: str):
-        k = RSAKeyPair.generate()
-        super().__init__(public_key=k.public_key, jwks_uri=None, issuer=None, audience=None)
+        # Generate RSA key pair
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        
+        public_key_pem = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        
+        super().__init__(
+            public_key=public_key_pem,
+            algorithm='RS256',
+            audience=None,
+            issuer=None,
+        )
         self.token = token
 
-    async def load_access_token(self, token: str) -> AccessToken | None:
+    async def verify_token(self, token: str) -> AccessToken | None:
         if token == self.token:
             return AccessToken(
                 token=token,
@@ -69,10 +92,10 @@ class Fetch:
                     timeout=30,
                 )
             except httpx.HTTPError as e:
-                raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url}: {e!r}"))
+                raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to fetch {url}: {e!r}"))
 
             if response.status_code >= 400:
-                raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to fetch {url} - status code {response.status_code}"))
+                raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to fetch {url} - status code {response.status_code}"))
 
             page_raw = response.text
 
@@ -100,7 +123,6 @@ class Fetch:
     async def Google_Search_links(query: str, num_results: int = 5) -> list[str]:
         """
         Perform a scoped DuckDuckGo search and return a list of job posting URLs.
-        (Using DuckDuckGo because Google blocks most programmatic scraping.)
         """
         ddg_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
         links = []
@@ -123,7 +145,7 @@ class Fetch:
 # --- MCP Server Setup ---
 mcp = FastMCP(
     "Job Finder MCP Server",
-    auth=SimpleBearerAuthProvider(TOKEN),
+    auth=SimpleJWTVerifier(TOKEN),
 )
 
 # --- Tool: validate (required by Puch) ---
@@ -177,7 +199,7 @@ async def add_task_tool(phone: str, scope: str, text: str) -> str:
         task_id = add_task(phone, scope, text)
         return f"✅ Added (#{task_id}) to {scope}: “{text}”"
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to add task: {e}"))
+        raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to add task: {e}"))
 
 @mcp.tool(name="list_tasks", description="Lists all open tasks for a user, optionally filtered by scope.")
 async def list_tasks_tool(phone: str, scope: Optional[str] = None) -> str:
@@ -190,7 +212,7 @@ async def list_tasks_tool(phone: str, scope: Optional[str] = None) -> str:
             lines = [f"• #{r['id']} [{r['scope']}] {r['text']}" for r in rows]
             return "Your tasks:\n" + "\n".join(lines)
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to list tasks: {e}"))
+        raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to list tasks: {e}"))
 
 @mcp.tool(name="complete_task", description="Marks a task as complete using the task ID or text.")
 async def complete_task_tool(phone: str, task_text_or_id: str) -> str:
@@ -201,7 +223,7 @@ async def complete_task_tool(phone: str, task_text_or_id: str) -> str:
         else:
             return "Couldn’t find that task."
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to complete task: {e}"))
+        raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to complete task: {e}"))
 
 @mcp.tool(name="delete_task", description="Deletes a task from the list using the task ID or text.")
 async def delete_task_tool(phone: str, task_text_or_id: str) -> str:
@@ -212,14 +234,4 @@ async def delete_task_tool(phone: str, task_text_or_id: str) -> str:
         else:
             return "Couldn’t find that task."
     except Exception as e:
-        raise McpError(ErrorData(code=INTERNAL_ERROR, message=f"Failed to delete task: {e}"))
-
-# --- Run MCP Server ---
-async def main():
-    port = int(os.environ.get("PORT", 8086))  # Railway sets PORT automatically
-    print(f"🚀 Starting MCP server on http://0.0.0.0:{port}")
-    init_db()
-    await mcp.run_async("streamable-http", host="0.0.0.0", port=port)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        raise McpError(ErrorData(code="INTERNAL_ERROR", message=f"Failed to delete task: {e}"))
